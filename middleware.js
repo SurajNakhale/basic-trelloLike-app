@@ -32,7 +32,7 @@ export const authMiddleware = (req, res, next) => {
 
 
  export const adminMiddleware = (req, res, next) => {
-    let orgId = req.query.orgId;
+    let orgId = Number(req.query.orgId);
 
     const org = ORGNISATIONS.find(org => org.id == orgId);
 
@@ -50,6 +50,8 @@ export const authMiddleware = (req, res, next) => {
         })
         return;
     }
+
+    req.orgId = orgId;
     next();
 
  }
