@@ -1,7 +1,7 @@
 import express from "express";
 import jwt from "jsonwebtoken";
 import { JWT_SECRET } from "./config.js";
-import { adminMiddleware, authMiddleware } from "./middleware.js";
+import { authMiddleware } from "./middleware.js";
 
 let USERS = [
     // {
@@ -61,12 +61,12 @@ let ISSUESID = 0;
 const app = express();
 
 app.use(express.json());
-console.log("hither")
+console.log("hithere")
 //create endpoints
 app.post("/signup", (req, res) => {
     let { username, password } = req.body;
     console.log(username)
-    let userExist = USERS.find(u => u.username = username);
+    let userExist = USERS.find(u => u.username == username);
     if(userExist){
         res.status(400).json({
             message: "user exists"
@@ -99,7 +99,7 @@ app.post("/signin", (req, res) => {
     }
 
     const token = jwt.sign({
-        id: userExist.id
+        userId: userExist.id
     }, JWT_SECRET)
 
     res.status(200).json({
@@ -108,7 +108,7 @@ app.post("/signin", (req, res) => {
 })
 
 //user can create org
-app.post("/orgs",authMiddleware, (req, res) => {
+app.post("/orgs", authMiddleware, (req, res) => {
     const { title, description } = req.body;
     let userId = req.userId;
 
@@ -137,11 +137,13 @@ app.post("/orgs",authMiddleware, (req, res) => {
 
 })
 
-//add members to the org  http://localhost:3000/add-member?OrgId=2
-app.post("/add-members", authMiddleware, adminMiddleware, (req, res) => {
+//add members to the org 
+app.post("/org/:orgId/add-members/:id", authMiddleware, (req, res) => {
     const userId = req.userId;
-    const orgId = req.query.orgId;
+    const orgId = Number(req.params.orgId);
+    const id = Number(req.params.id)
 
+    
     const org = ORGANISATIONS.find(org => org.id == orgId);
 
     if(!org){
@@ -151,21 +153,39 @@ app.post("/add-members", authMiddleware, adminMiddleware, (req, res) => {
         return;
     }
 
-    if(!org.members.include(userId)){
-        org.members.push(userId);
+    let valid = USERS.find(x => x.id == id);
+    if(!valid){
+        res.status(400).res.json({
+            message: "user does not exists"
+        })
+        return;
+    }
+    
+    if(!org.members.includes(id)){
+        org.members.push(id);
     }
 
     res.status(200).json({
         message: "new member added",
-        id: userId
+        id: id,
+        username: valid.username
     })
 
 })
 
-//create board http://localhost:3000/boards?orgId=1
-app.post("/boards",authMiddleware, adminMiddleware, (req, res) => {
-    const orgId = req.query.orgId;
+//create board 
+app.post("/org/:orgId/board",authMiddleware, (req, res) => {
+    const orgId = Number(req.params.orgId);
     const { title } = req.body;
+
+    let org = ORGANISATIONS.find(x => x.id == orgId);
+    if(!org){
+        res.status(400).json({
+            message: "org not exists"
+        })
+        return;
+    }
+
 
     let boardExists = BOARDS.find(b => b.title == title && b.orgId == orgId);
     if(boardExists){
@@ -177,24 +197,34 @@ app.post("/boards",authMiddleware, adminMiddleware, (req, res) => {
 
     let newBoard = {
         id: BOARDSID++,
-        orgId,
-        title
+        orgId: orgId,
+        title: title
     }
 
     BOARDS.push(newBoard);
 
     res.status(200).json({
-        message: "new board added"
+        message: "new board added",
+        id: newBoard.id,
+        title: newBoard.title
     })
 
 })
 
-//create issues http://localhost:3000/issues?boardId=2
-app.post("/issues", authMiddleware, (req, res) => {
-    const boardId = req.query.boardId;
+//create issues
+app.post("/org/:orgId/board/:boardId/issues", authMiddleware, (req, res) => {
+    const orgId = Number(req.params.orgId);
+    const boardId = Number(req.params.boardId);
+
+     let org = ORGANISATIONS.find(x => x.id == orgId);
+    if(!org){
+        res.status(400).json({
+            message: "org not exists"
+        })
+        return;
+    }
 
     const board = BOARDS.find(b => b.id == boardId);
-
     if (!board) {
         return res.status(400).json({
             message: "board does not exist"
@@ -229,10 +259,10 @@ app.post("/issues", authMiddleware, (req, res) => {
 
 
 //get endpoints
-//retrives boards org have http://localhost:3000/dashboard?orgId=2
-app.get("/dashboard", authMiddleware,  (req, res) => {
+//retrives boards org have 
+app.get("/org/:orgId/dashboard", authMiddleware,  (req, res) => {
     const userId = req.userId;
-    const orgId = req.query.orgId;
+    const orgId = Number(req.params.orgId);
 
     let org = ORGANISATIONS.find(x => x.id == orgId);
     
@@ -256,7 +286,7 @@ app.get("/dashboard", authMiddleware,  (req, res) => {
 
     let boards = [];
     for(let i=0; i<BOARDS.length; i++){
-        if(BOARDS.orgId == orgId){
+        if(BOARDS[i].orgId == orgId){
             boards.push({
                 id: BOARDS[i].id,
                 title: BOARDS[i].title,
@@ -271,13 +301,12 @@ app.get("/dashboard", authMiddleware,  (req, res) => {
     })
 })
 
-//retrives board with id http://localhost:3000/board?id=2
-app.get("/board", authMiddleware, (req, res) => {
-    let userId = req.userId;
-    let boardId = req.query.id;
+//retrives board with id display board details along with issues
+app.get("/org/:orgId/board/:boardId", authMiddleware, (req, res) => {
+    let orgId = Number(req.params.orgId);
+    let boardId = Number(req.params.boardId);
 
     let boardExists = BOARDS.find(x => x.id == boardId);
-
     if(!boardExists){
         res.status(400).json({
             message: "board does not exist"
@@ -285,16 +314,26 @@ app.get("/board", authMiddleware, (req, res) => {
         return;
     }
 
-    let issues = [];
-    for(let i=0; i<ISSUES.length; i++){
-        if(ISSUES[i].boardId == boardId){
-            issues.push({
-                id: ISSUES[i].id,
-                title: ISSUES[i].title,
-                status: ISSUES[i].status,
-            })
-        }
-    }
+    // let issues = [];
+    // for(let i=0; i<ISSUES.length; i++){
+    //     if(ISSUES[i].boardId == boardId){
+    //         issues.push({
+    //             id: ISSUES[i].id,   
+    //             title: ISSUES[i].title,
+    //             status: ISSUES[i].status,
+    //         })
+    //     }
+    // }
+
+    let issues = ISSUES
+                .filter(x => x.boardId == boardId)
+                .map(x => {
+                    return {
+                        id: x.id,
+                        title: x.title,
+                        status: x.status
+                    }
+                })
 
     res.status(200).json({
         issues: issues
@@ -302,10 +341,10 @@ app.get("/board", authMiddleware, (req, res) => {
 
 })
 
-//get all members in org http://localhost:3000/members?orgId=2
-app.get("/members", authMiddleware,  (req, res) => {
+//get all members in org 
+app.get("/org/:orgId/members", authMiddleware,  (req, res) => {
     const uerId = req.userId;
-    const orgId = req.query.orgId;
+    const orgId = Number(req.params.orgId);
 
     let orgExist = ORGANISATIONS.find(x => x.id == orgId);
     if(!orgExist){
@@ -314,31 +353,40 @@ app.get("/members", authMiddleware,  (req, res) => {
         })
         return;
     }
-    let member = [];
 
-    for(let i=0; i<orgExist.members.length; i++){
-        let userId = orgExist.members[i];
-        let user = USERS.find(x => x.id == userId);
+    // let member = [];
+    // for(let i=0; i<orgExist.members.length; i++){
+    //     let userId = orgExist.members[i];
+    //     let user = USERS.find(x => x.id == userId);
 
-        member.push({
+    //     member.push({
+    //         id: user.id,
+    //         username: user.username
+    //     })
+    // }
+
+    let members = orgExist.members.map(m => {
+        let user = USERS.find(x => x.id == m);
+        return {
             id: user.id,
             username: user.username
-        })
-    }
+        }
+    })
 
     res.status(200).json({
-        members: member
+        members: members
     })
     
 })
 
 
-//update board //http://localhost:3000/board?boardId=1
-app.put("/board", authMiddleware, (req, res) => {
-    const boardId = req.query.boardId;
+//update board
+app.put("/org/:orgId/board/:boardId", authMiddleware, (req, res) => {
+    const boardId = Number(req.params.boardId);
+    const orgId = Number(req.params.orgId);
 
-    const boardExists = BOARDS.find(x => x.id == boardId);
-    if(!boardExists){
+    let index = BOARDS.findIndex(x => x.id == boardId && x.orgId == orgId);
+    if(index == -1){
         res.status(400).json({
             message: "board does not exists"
         })
@@ -347,26 +395,27 @@ app.put("/board", authMiddleware, (req, res) => {
 
     const { title } = req.body;
 
-    boardExists = {
-        id: boardExists.id,
-        title: title,
-        orgId: boardExists.orgId
+    BOARDS[index] = {
+        ...BOARDS[index],
+        title
     }
 
     res.status(200).json({
         message: "board updated",
-        boardId: boardExists.id
+        boardId: BOARDS[index].id
     })
 
 
 })
 
-// http://localhost:3000/issue?id=1
-app.put("/issue", authMiddleware,  (req, res) => {
-    const issueId = req.query.id;
+//update issue status
+app.put("/org/:orgId/board/:boardId/issue/:issueId", authMiddleware,  (req, res) => {
+    const orgId = Number(req.params.orgId);
+    const boardId = Number(req.params.boardId);
+    const issueId = Number(req.params.issueId);
     
-    const issueExists = ISSUES.find(x=> x.id == issueId);
-    if(!issueExists){
+    const index = ISSUES.findIndex(x=> x.id == issueId && x.boardId == boardId);
+    if(index == -1){
         res.status(400).json({
             message: "does not exists"
         })
@@ -375,29 +424,25 @@ app.put("/issue", authMiddleware,  (req, res) => {
 
     const { status } = req.body;
 
-    issueExists = {
-        id: issueExists,
-        title: issueExists.title,
-        status: status,
-        boardId: issueExists.boardId
+    ISSUES[index] = {
+        ...ISSUES[index],
+        status
     }
 
 
-    res.status(400).json({
+    res.status(200).json({
         message: "issue updated",
-        title: userExist.title,
-        status: userExist.status
+        title: ISSUES[index].title,
+        status: ISSUES[index].status
     })
-    
-    
 
 })
 
 
 
-//delete endpoints http://localhost:3000/board?id=2;
-app.delete("/board", (req, res) => {
-    const boardId = req.query.id;
+//delete endpoints board
+app.delete("/org/:orgId/board/:boardId",authMiddleware, (req, res) => {
+    const boardId = Number(req.params.boardId);
 
     const boardExists = BOARDS.find(x => x.id == boardId);
     if(!boardExists){
@@ -416,21 +461,22 @@ app.delete("/board", (req, res) => {
     })
 })
 
-//http://localhost:3000/org/:id/member/:memberId
-app.delete("/org/:id/member/:memberId", adminMiddleware, (req, res) => {
-    const memberId = Number(req.query.id);
+//delete member of board
+app.delete("/org/:orgId/member/:memberId",authMiddleware, (req, res) => {
+    const memberId = Number(req.params.memberId);
+    const orgId = Number(req.params.orgId)
 
     //find org id
-    let org = ORGANISATIONS.find(x => x.id = req.orgId )
+    let org = ORGANISATIONS.find(x => x.id == orgId )
 
-    if(!org || !org.member.includes(memberId)){
+    if(!org || !org.members.includes(memberId)){
         res.status(400).json({
             message: "org does not exist or member not exist",
         })
         return;
     }
 
-    org.members = org.members.filter(x => x != memberId)
+    org.members = org.members.filter(x => x !== memberId)
 
     res.status(200).json({
         message: "member deleted",
@@ -440,9 +486,9 @@ app.delete("/org/:id/member/:memberId", adminMiddleware, (req, res) => {
 })
 
 
-//http://localhost:3000/org/:orgId/board/:boardId/issue/:issueId
-app.delete("/org/:orgId/board/:boardId/issue/:issueId", adminMiddleware, (req, res) => {
-    const orgId = req.orgId;
+//delete issue 
+app.delete("/org/:orgId/board/:boardId/issue/:issueId", authMiddleware, (req, res) => {
+    const orgId = Number(req.params.orgId);
     const boardId = Number(req.params.boardId);
     const issueId = Number(req.params.issueId);
 

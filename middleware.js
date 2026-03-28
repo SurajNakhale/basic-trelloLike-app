@@ -31,27 +31,27 @@ export const authMiddleware = (req, res, next) => {
 
 
 
- export const adminMiddleware = (req, res, next) => {
-    let orgId = Number(req.query.orgId);
+//  export const adminMiddleware = (req, res, next) => {
+//     let orgId = Number(req.query.orgId);
 
-    const org = ORGNISATIONS.find(org => org.id == orgId);
+//     const org = ORGNISATIONS.find(org => org.id == orgId);
 
-    if(!org){
-        res.status(400).json({
-            message: "org does not exist",
-        })
-        return;
-    }
+//     if(!org){
+//         res.status(400).json({
+//             message: "org does not exist",
+//         })
+//         return;
+//     }
 
 
-    if(org.adminId != req.userId){
-        res.status(401).json({
-            message: "user is not admin of this org"
-        })
-        return;
-    }
+//     if(org.adminId != req.userId){
+//         res.status(401).json({
+//             message: "user is not admin of this org"
+//         })
+//         return;
+//     }
 
-    req.orgId = orgId;
-    next();
+//     req.orgId = orgId;
+//     next();
 
- }
+//  }
