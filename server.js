@@ -2,6 +2,9 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import { JWT_SECRET } from "./config.js";
 import { authMiddleware } from "./middleware.js";
+import  mongoose  from "mongoose";
+
+mongoose.connect(DB_URL);
 
 let USERS = [
     // {

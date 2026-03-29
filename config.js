@@ -1,1 +1,0 @@
-export const JWT_SECRET = "trello_secretKey";
