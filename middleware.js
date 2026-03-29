@@ -1,5 +1,7 @@
 import jwt from "jsonwebtoken";
 import { JWT_SECRET } from "./config.js";
+import { Org } from "./db.js";
+import mongoose from "mongoose";
 
 export const authMiddleware = (req, res, next) => {
     try{
@@ -31,27 +33,39 @@ export const authMiddleware = (req, res, next) => {
 
 
 
-//  export const adminMiddleware = (req, res, next) => {
-//     let orgId = Number(req.query.orgId);
+ export const adminMiddleware = async (req, res, next) => {
+    let orgId = req.params.orgId
+    if(!mongoose.Types.ObjectId.isValid(orgId)){
+        res.status(400).json({
+            message: "invalid orgId!!"
+        })
+        return
+    }
+    try{
 
-//     const org = ORGNISATIONS.find(org => org.id == orgId);
+        const org = await Org.findById(orgId);
+        if(!org){
+            res.status(404).json({
+                message: "org does not exist",
+            })
+            return;
+        }
 
-//     if(!org){
-//         res.status(400).json({
-//             message: "org does not exist",
-//         })
-//         return;
-//     }
+        if(org.adminId.toString() !== (req.userId)){
+            res.status(403).json({
+                message: "user is not admin of this org"
+            })
+            return;
+        }
+    
+        req.org = org;
+        next();
+    }
+    catch(err){
+         res.status(500).json({
+            message: "Internal server error",
+            error: err.message
+        });
+    }
 
-
-//     if(org.adminId != req.userId){
-//         res.status(401).json({
-//             message: "user is not admin of this org"
-//         })
-//         return;
-//     }
-
-//     req.orgId = orgId;
-//     next();
-
-//  }
+ }

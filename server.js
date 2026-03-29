@@ -1,263 +1,252 @@
 import express from "express";
 import jwt from "jsonwebtoken";
-import { JWT_SECRET } from "./config.js";
+import { JWT_SECRET, DB_URL } from "./config.js";
 import { authMiddleware } from "./middleware.js";
 import  mongoose  from "mongoose";
-
-mongoose.connect(DB_URL);
-
-let USERS = [
-    // {
-    //     id: 1,
-    //     username: "jin",
-    //     password: "123@jin",
-    // },
-    // {
-    //     id: 2,
-    //     username: "raze",
-    //     password: "123@raze"
-    // }
-]
-
-let ORGANISATIONS = [
-    // {
-    //     id: 1,
-    //     title: "100xdevs",
-    //     adminId: 1,
-    //     members: [1, 2]
-    // },
-    // {
-    //     id: 2,
-    //     title: "xyzorg",
-    //     adminId: 2,
-    //     members: []
-    // }
-]
-
-let BOARDS = [
-    // {
-    //     id: 1,
-    //     orgId: 1,
-    //     title: "ios backend"
-    // },
-    // {
-    //     id: 2,
-    //     orgId: 1,
-    //     title: "frontend"
-    // }
-]
-
-let ISSUES = [
-    // {   
-    //     id: 1,
-    //     title: "add toggle dark mode function",
-    //     boardId: 1,
-    //     status: "IN_PROGRESS" // TODO || IN_PROGRESS || DONE || ARCHIVE
-    // }
-]
-
-let USERID = 0;
-let ORGANISATIONSID = 0;
-let BOARDSID = 0;
-let ISSUESID = 0;
+import { User, Org, Board, Issue } from "./db.js";
 
 const app = express();
 
+
 app.use(express.json());
 console.log("hithere")
+
+
 //create endpoints
-app.post("/signup", (req, res) => {
+app.post("/signup", async (req, res) => {
     let { username, password } = req.body;
-    console.log(username)
-    let userExist = USERS.find(u => u.username == username);
-    if(userExist){
-        res.status(400).json({
-            message: "user exists"
-        });
-        return;
+    console.log(username);
+
+    try{
+        let userExist = await User.findOne({ username });
+        if(userExist){
+            res.status(400).json({
+                message: "user exists"
+            });
+            return;
+        }
+    
+        await User.create({
+            username,
+            password
+        })
+    
+        res.status(200).json({
+            message: "signup successfull"
+        })
     }
-
-    USERS.push({
-        id: USERID++,
-        username,
-        password
-    })
-
-    res.status(200).json({
-        message: "signup successfull"
-    })
+    catch(err){
+        res.status(500).json({
+            error: err
+        })
+    }
 
 })
 
-app.post("/signin", (req, res) => {
+app.post("/signin", async (req, res) => {
     let { username, password } = req.body;
 
-    let userExist = USERS.find(u => u.username == username && u.password == password);
+    try{
+        let userExist = await User.findOne({ username, password});
 
-    if(!userExist){
-        res.status(400).json({
-            message: "user does not exists"
-        });
-        return;
+        if(!userExist){
+            res.status(400).json({
+                message: "user does not exists"
+            });
+            return;
+        }
+
+        const token = jwt.sign({
+            userId: userExist._id
+        }, JWT_SECRET)
+
+        res.status(200).json({
+            token: token
+        })
+
     }
-
-    const token = jwt.sign({
-        userId: userExist.id
-    }, JWT_SECRET)
-
-    res.status(200).json({
-        token: token
-    })
+    catch(err){
+        res.status(500).json({
+            error: err
+        })
+    }
 })
 
 //user can create org
-app.post("/orgs", authMiddleware, (req, res) => {
+app.post("/orgs", authMiddleware, async (req, res) => {
     const { title, description } = req.body;
     let userId = req.userId;
 
-    let orgExist = ORGANISATIONS.find(org => org.title == title && org.description == description);
-    if(orgExist){
-        res.status(400).json({
-            message: "already exist"
-        });
-        return;
+    try{
+        let orgExist =await Org.findOne({ title, description });
+        if(orgExist){
+            res.status(400).json({
+                message: "already exist"
+            });
+            return;
+        }
+    
+        let newOrg = await Org.create({
+            title,
+            description,
+            adminId: userId,
+            members: [userId]
+        })
+    
+        res.json({
+            message: "org created",
+            id: newOrg._id
+        })
     }
-
-    const newOrg = {
-        id: ORGANISATIONSID++,
-        title,
-        description,
-        adminId: userId,
-        members: []
+    catch(err){
+        res.status(500).json({
+            error: err.message
+        })
     }
-
-    ORGANISATIONS.push(newOrg)
-
-    res.status(200).json({
-        message: "org created",
-        id: newOrg.id
-    })
 
 })
 
 //add members to the org 
-app.post("/org/:orgId/add-members/:id", authMiddleware, (req, res) => {
+app.post("/org/:orgId/add-members/:id", authMiddleware, async (req, res) => {
     const userId = req.userId;
-    const orgId = Number(req.params.orgId);
-    const id = Number(req.params.id)
+    const orgId = req.params.orgId;
+    const id = req.params.id
 
-    
-    const org = ORGANISATIONS.find(org => org.id == orgId);
+    try{
+        let org = await Org.findById(orgId);
+        if(!org){
+            res.status(400).json({
+                message: "org not exists"
+            })
+            return;
+        }
 
-    if(!org){
-        res.status(400).json({
-            message: "org not exists"
+        let valid = await User.findById(id);
+        if(!valid){
+            res.status(400).json({
+                message: "user does not exists"
+            })
+            return;
+        }
+        
+        await Org.updateOne(
+            {_id: orgId},
+            { $addToSet: {members: id}}
+        );
+
+        res.json({
+            message: "new member added",
+            id: id,
+            username: valid.username
         })
-        return;
     }
-
-    let valid = USERS.find(x => x.id == id);
-    if(!valid){
-        res.status(400).res.json({
-            message: "user does not exists"
-        })
-        return;
-    }
-    
-    if(!org.members.includes(id)){
-        org.members.push(id);
-    }
-
-    res.status(200).json({
-        message: "new member added",
-        id: id,
-        username: valid.username
-    })
+        catch(err){
+            res.status(500).json({
+                error: err.message
+            })
+        }
 
 })
 
 //create board 
-app.post("/org/:orgId/board",authMiddleware, (req, res) => {
-    const orgId = Number(req.params.orgId);
+app.post("/org/:orgId/board",authMiddleware, async (req, res) => {
+    const orgId = req.params.orgId;
     const { title } = req.body;
+    try{
+        let org = await Org.findById(orgId);
+        if(!org){
+            res.status(400).json({
+                message: "org not exists"
+            })
+            return;
+        }
 
-    let org = ORGANISATIONS.find(x => x.id == orgId);
-    if(!org){
-        res.status(400).json({
-            message: "org not exists"
+
+        let boardExists = await Board.findOne({ title, orgId: org._id});
+        if(boardExists){
+            res.status(400).json({
+                message: "board already exists"
+            })
+            return;
+        }
+
+        let newBoard = await Board.create({
+            title,
+            orgId: org._id
         })
-        return;
-    }
 
-
-    let boardExists = BOARDS.find(b => b.title == title && b.orgId == orgId);
-    if(boardExists){
-        res.status(400).json({
-            message: "board already exists"
+        res.status(200).json({
+            message: "new board added",
+            id: newBoard._id,
+            title: newBoard.title
         })
-        return;
     }
-
-    let newBoard = {
-        id: BOARDSID++,
-        orgId: orgId,
-        title: title
+    catch(err){
+         res.status(500).json({
+                error: err.message
+         })
     }
-
-    BOARDS.push(newBoard);
-
-    res.status(200).json({
-        message: "new board added",
-        id: newBoard.id,
-        title: newBoard.title
-    })
 
 })
 
 //create issues
-app.post("/org/:orgId/board/:boardId/issues", authMiddleware, (req, res) => {
-    const orgId = Number(req.params.orgId);
-    const boardId = Number(req.params.boardId);
+app.post("/org/:orgId/board/:boardId/issues", authMiddleware, async(req, res) => {
+    const orgId = req.params.orgId;
+    const boardId = req.params.boardId;
 
-     let org = ORGANISATIONS.find(x => x.id == orgId);
-    if(!org){
-        res.status(400).json({
-            message: "org not exists"
-        })
-        return;
+    try{
+
+        let org = await Org.findById(orgId);
+       if(!org){
+           res.status(400).json({
+               message: "org not exists"
+           })
+           return;
+       }
+   
+       const board = await Board.findById(boardId);
+       if (!board) {
+           return res.status(400).json({
+               message: "board does not exist"
+           });
+           
+       }
+   
+       const { title, status } = req.body;
+        let validstatus = ["IN_PROGRESS", "UP_NEXT", "DONE", "ARCHIVE"];
+
+        if(!validstatus.includes(status)){
+            res.status(400).json({
+                message: "invalid status code"
+            })
+            return;
+        }
+
+       let issueExists = await Issue.findOne({ title, boardId});
+       if(issueExists){
+           res.status(400).json({
+               message: "issue already exists"
+           })
+           return;
+       }
+       
+       let newIssue = await Issue.create({
+           title,
+           boardId,
+           status
+       })
+   
+       res.status(200).json({
+           message: "new issue created",
+           issues: newIssue
+       })
+    }
+    catch(err){
+        res.status(500).json({
+                error: err.message
+         })
     }
 
-    const board = BOARDS.find(b => b.id == boardId);
-    if (!board) {
-        return res.status(400).json({
-            message: "board does not exist"
-        });
-        
-    }
-
-    const { title } = req.body;
-
-    let issueExists = ISSUES.find(i => i.title == title && i.boardId == boardId);
-    if(issueExists){
-        res.status(400).json({
-            message: "issue already exists"
-        })
-        return;
-    }
-
-    let newIssue = {
-        id: ISSUESID++,
-        boardId,
-        title,
-        status: "UP_NEXT" // "IN_PROGRESS" || "DONE" || "ARCHIVE"
-    }
-
-    ISSUES.push(newIssue);
-
-    res.status(200).json({
-        message: "new issue created",
-        issues: newIssue
-    })
 })
 
 
@@ -522,7 +511,18 @@ app.delete("/org/:orgId/board/:boardId/issue/:issueId", authMiddleware, (req, re
 
 })
 
+async function main(){
+    try{
+        await mongoose.connect(DB_URL);
+        console.log("mongodb connected!!");
 
-app.listen(3000, () => {
-    console.log("server running on port 3000");
-})
+        app.listen(3000, () => {
+            console.log("server running on port 3000");
+        })
+    }
+    catch(err){
+        console.log(err)
+    }
+}
+
+main();
