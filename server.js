@@ -1,9 +1,10 @@
 import express from "express";
 import jwt from "jsonwebtoken";
 import { JWT_SECRET, DB_URL } from "./config.js";
-import { authMiddleware } from "./middleware.js";
+import { authMiddleware, adminMiddleware } from "./middleware.js";
 import  mongoose  from "mongoose";
 import { User, Org, Board, Issue } from "./db.js";
+import bcrypt from "bcrypt";
 
 const app = express();
 
@@ -25,10 +26,12 @@ app.post("/signup", async (req, res) => {
             });
             return;
         }
+        //hash password
+        let hashpass =await bcrypt.hash(password, 10);
     
         await User.create({
             username,
-            password
+            password: hashpass
         })
     
         res.status(200).json({
@@ -47,13 +50,21 @@ app.post("/signin", async (req, res) => {
     let { username, password } = req.body;
 
     try{
-        let userExist = await User.findOne({ username, password});
+
+        let userExist = await User.findOne({ username });
 
         if(!userExist){
             res.status(400).json({
                 message: "user does not exists"
             });
             return;
+        }
+        //compare password
+        let isMatch =await bcrypt.compare(password, userExist.password);
+        if(!isMatch){
+            res.status(401).json({
+                message: "pass incorrect"
+            })
         }
 
         const token = jwt.sign({
@@ -149,7 +160,7 @@ app.post("/org/:orgId/add-members/:id", authMiddleware, async (req, res) => {
 })
 
 //create board 
-app.post("/org/:orgId/board",authMiddleware, async (req, res) => {
+app.post("/org/:orgId/board",authMiddleware, adminMiddleware,  async (req, res) => {
     const orgId = req.params.orgId;
     const { title } = req.body;
     try{
@@ -190,7 +201,7 @@ app.post("/org/:orgId/board",authMiddleware, async (req, res) => {
 })
 
 //create issues
-app.post("/org/:orgId/board/:boardId/issues", authMiddleware, async(req, res) => {
+app.post("/org/:orgId/board/:boardId/issues", authMiddleware, adminMiddleware, async(req, res) => {
     const orgId = req.params.orgId;
     const boardId = req.params.boardId;
 
@@ -252,262 +263,256 @@ app.post("/org/:orgId/board/:boardId/issues", authMiddleware, async(req, res) =>
 
 //get endpoints
 //retrives boards org have 
-app.get("/org/:orgId/dashboard", authMiddleware,  (req, res) => {
-    const userId = req.userId;
-    const orgId = Number(req.params.orgId);
+app.get("/org/:orgId/dashboard", authMiddleware, adminMiddleware, async (req, res) => {
+    const orgId = req.params.orgId;
+    try{
 
-    let org = ORGANISATIONS.find(x => x.id == orgId);
-    
-    if(!org || org.adminId != userId){
-        res.status(400).json({
-            message: "org does not exist or not valid admin"
-        })
-        return;
-    }
-
-    let organisation = {
-            ...org,
-            members: org.members.map(memberId => {
-                const user = USERS.find(user => user.id == memberId);
+        let org = await Org.findById(orgId)
+            .populate("members", "username")
+            .lean();
+        
+        let oresult = {
+            id: org._id,
+            title: org.title,
+            description: org.description,
+            members: org.members.map(x => {
                 return {
-                    id: user.id,
-                    username: user.username
+                    id: x._id,
+                    username: x.username
                 }
             })
-    }
-
-    let boards = [];
-    for(let i=0; i<BOARDS.length; i++){
-        if(BOARDS[i].orgId == orgId){
-            boards.push({
-                id: BOARDS[i].id,
-                title: BOARDS[i].title,
-            });
         }
+
+        let boards = await Board.find({ orgId: orgId }).select("title").lean();
+        let bresult = boards.map(x => ({
+            id: x._id,
+            title: x.title
+        }))
+        
+        res.json({
+            organisation: oresult,
+            boards: bresult
+        })
     }
-    
-    
-    res.status(200).json({
-        organisation: organisation,
-        boards: boards
-    })
+    catch(err){
+         res.status(500).json({
+                error: err.message
+         })
+    }
 })
 
 //retrives board with id display board details along with issues
-app.get("/org/:orgId/board/:boardId", authMiddleware, (req, res) => {
-    let orgId = Number(req.params.orgId);
-    let boardId = Number(req.params.boardId);
+app.get("/org/:orgId/board/:boardId", authMiddleware, adminMiddleware, async (req, res) => {
+    let { orgId, boardId } = req.params;
 
-    let boardExists = BOARDS.find(x => x.id == boardId);
-    if(!boardExists){
-        res.status(400).json({
-            message: "board does not exist"
+    try{
+
+        let board = await Board.findOne({ _id: boardId, orgId});
+        if(!board){
+            res.status(400).json({
+                message: "board does not exist"
+            })
+            return;
+        }
+    
+        let issues = await Issue.find({ boardId }).select("title status").lean()
+        let rissue = issues.map(x => ({
+            id: x._id,
+            title: x.title,
+            status: x.status
+        }))
+    
+        res.status(200).json({
+            issues: rissue
         })
-        return;
     }
-
-    // let issues = [];
-    // for(let i=0; i<ISSUES.length; i++){
-    //     if(ISSUES[i].boardId == boardId){
-    //         issues.push({
-    //             id: ISSUES[i].id,   
-    //             title: ISSUES[i].title,
-    //             status: ISSUES[i].status,
-    //         })
-    //     }
-    // }
-
-    let issues = ISSUES
-                .filter(x => x.boardId == boardId)
-                .map(x => {
-                    return {
-                        id: x.id,
-                        title: x.title,
-                        status: x.status
-                    }
-                })
-
-    res.status(200).json({
-        issues: issues
-    })
+    catch(err){
+          res.status(500).json({
+                error: err.message
+         })
+    }
 
 })
 
 //get all members in org 
-app.get("/org/:orgId/members", authMiddleware,  (req, res) => {
-    const uerId = req.userId;
-    const orgId = Number(req.params.orgId);
+app.get("/org/:orgId/members", authMiddleware,adminMiddleware,  async (req, res) => {
+    const orgId = req.params.orgId;
+    try{
 
-    let orgExist = ORGANISATIONS.find(x => x.id == orgId);
-    if(!orgExist){
-        res.status(400).json({
-            message: "org not exists"
-        })
-        return;
-    }
-
-    // let member = [];
-    // for(let i=0; i<orgExist.members.length; i++){
-    //     let userId = orgExist.members[i];
-    //     let user = USERS.find(x => x.id == userId);
-
-    //     member.push({
-    //         id: user.id,
-    //         username: user.username
-    //     })
-    // }
-
-    let members = orgExist.members.map(m => {
-        let user = USERS.find(x => x.id == m);
-        return {
-            id: user.id,
-            username: user.username
+        let org = await Org.findOne({ _id: orgId }).populate("members", "username").lean();
+        if(!org){
+            res.status(400).json({
+                message: "org not exists"
+            })
+            return;
         }
-    })
-
-    res.status(200).json({
-        members: members
-    })
+    
+        let members = org.members.map(x => ({
+            id: x._id,
+            username: x.username
+        }))
+    
+        res.status(200).json({
+            members: members
+        })
+    }
+    catch(err){
+             res.status(500).json({
+                error: err.message
+         })
+    }
     
 })
 
 
 //update board
-app.put("/org/:orgId/board/:boardId", authMiddleware, (req, res) => {
-    const boardId = Number(req.params.boardId);
-    const orgId = Number(req.params.orgId);
+app.put("/org/:orgId/board/:boardId", authMiddleware, adminMiddleware, async (req, res) => {
+    const boardId = req.params.boardId;
+    const org = req.org;
+    try{
 
-    let index = BOARDS.findIndex(x => x.id == boardId && x.orgId == orgId);
-    if(index == -1){
-        res.status(400).json({
-            message: "board does not exists"
+        let board = await Board.findById({ _id: boardId, orgId: org._id});
+        if(!board){
+            res.status(400).json({
+                message: "board does not exists"
+            })
+            return;
+        }
+    
+        const { title } = req.body;
+    
+        await Board.updateOne({_id: board._id}, {$set: {title: title}})
+        
+        res.status(200).json({
+            message: "board updated",
+            boardId: board._id
         })
-        return;
     }
-
-    const { title } = req.body;
-
-    BOARDS[index] = {
-        ...BOARDS[index],
-        title
+    catch(err){
+            res.status(500).json({
+                error: err.message
+         })
     }
-
-    res.status(200).json({
-        message: "board updated",
-        boardId: BOARDS[index].id
-    })
 
 
 })
 
 //update issue status
-app.put("/org/:orgId/board/:boardId/issue/:issueId", authMiddleware,  (req, res) => {
-    const orgId = Number(req.params.orgId);
-    const boardId = Number(req.params.boardId);
-    const issueId = Number(req.params.issueId);
-    
-    const index = ISSUES.findIndex(x=> x.id == issueId && x.boardId == boardId);
-    if(index == -1){
-        res.status(400).json({
-            message: "does not exists"
-        })
-        return;
-    }
-
+app.put("/org/:orgId/board/:boardId/issue/:issueId", authMiddleware, adminMiddleware, async  (req, res) => {
+    const boardId = req.params.boardId;
+    const issueId = req.params.issueId;
     const { status } = req.body;
-
-    ISSUES[index] = {
-        ...ISSUES[index],
-        status
+    let valid = ["UP_NEXT", "IN_PROGRESS", "DONE", "ARCHIVE"];
+    if(!valid.includes(status)){
+        res.status(401).json({
+            message: "in valid status input!!"
+        })
     }
+    
+    
+    try{
 
-
-    res.status(200).json({
-        message: "issue updated",
-        title: ISSUES[index].title,
-        status: ISSUES[index].status
-    })
+        let issue = await Issue.findByIdAndUpdate(issueId, 
+            {$set: {status: status}},
+            {new: true}
+        ).lean();
+    
+        res.status(200).json({
+            message: "issue updated",
+            title: issue.title,
+            status: issue.status
+        })
+    }
+    catch(err){
+          res.status(500).json({
+                error: err.message
+         })
+    }
 
 })
 
 
 
 //delete endpoints board
-app.delete("/org/:orgId/board/:boardId",authMiddleware, (req, res) => {
-    const boardId = Number(req.params.boardId);
+app.delete("/org/:orgId/board/:boardId",authMiddleware, adminMiddleware, async (req, res) => {
+    const boardId = req.params.boardId;
 
-    const boardExists = BOARDS.find(x => x.id == boardId);
-    if(!boardExists){
-        res.status(400).json({
-            message: "board does not exists"
+    try{
+
+        const board = await Board.findOneAndDelete({ _id: boardId, orgId: req.org._id});
+        if(!board){
+            res.status(400).json({
+                message: "board does not exists"
+            })
+            return;
+        }
+    
+        res.status(200).json({
+            message: "boards deleted",
+            board: board
         })
-        return;
     }
-
-    BOARDS = BOARDS.filter(x => x.id != boardExists.id)
-
-    res.status(200).json({
-        message: "boards deleted",
-        id: boardExists.id,
-        title: boardExists.title
-    })
+    catch(err){
+          res.status(500).json({
+                error: err.message
+         })
+    }
 })
 
-//delete member of board
-app.delete("/org/:orgId/member/:memberId",authMiddleware, (req, res) => {
-    const memberId = Number(req.params.memberId);
-    const orgId = Number(req.params.orgId)
+//delete member of org
+app.delete("/org/:orgId/member/:memberId",authMiddleware, adminMiddleware,  async (req, res) => {
+    const memberId = req.params.memberId;
+    const org = req.org;
+   
+    try{
 
-    //find org id
-    let org = ORGANISATIONS.find(x => x.id == orgId )
-
-    if(!org || !org.members.includes(memberId)){
-        res.status(400).json({
-            message: "org does not exist or member not exist",
+        let result = await Org.updateOne({_id: org._id}, {$pull: {members: memberId}})
+         if (result.modifiedCount === 0) {
+            return res.status(404).json({
+                message: "Member not found"
+            });
+        }
+    
+        res.status(200).json({
+            message: "member removed",
+            
         })
-        return;
     }
-
-    org.members = org.members.filter(x => x !== memberId)
-
-    res.status(200).json({
-        message: "member deleted",
-        members: org.members
-    })
+    catch(err){
+         res.status(500).json({
+                error: err.message
+         })
+    }
 
 })
 
 
 //delete issue 
-app.delete("/org/:orgId/board/:boardId/issue/:issueId", authMiddleware, (req, res) => {
-    const orgId = Number(req.params.orgId);
-    const boardId = Number(req.params.boardId);
-    const issueId = Number(req.params.issueId);
+app.delete("/org/:orgId/board/:boardId/issue/:issueId", authMiddleware, adminMiddleware, async (req, res) => {
+    const boardId = req.params.boardId;
+    const issueId = req.params.issueId;
 
-    let org = ORGANISATIONS.find(x => x.id == orgId);
-    if(!org){
-        res.status(400).json({
-            message: "org not exists"
+    try{
+    
+        let issue = await Issue.findOneAndDelete({_id: issueId, boardId: boardId});
+
+        if(!issue){
+            res.status(404).json({
+                message: "issue does not exists"
+            })
+            return;
+        }
+
+        
+        res.json({
+            message: "issue deleted successfully"
         })
-        return;
     }
-
-    let board = BOARDS.find(x => x.orgId == orgId && x.id == boardId);
-    if(!board){
-        res.status(400).json({
-            message: "board not exist"
-        })
-        return;
+    catch(err){
+        res.status(500).json({
+                error: err.message
+         })
     }
-
-
-    ISSUES = ISSUES.filter(x => 
-        !(x.boardId == boardId && x.id == issueId)
-    )
-
-    res.status(200).json({
-        message: "issue deleted successfully"
-    })
 
 })
 
