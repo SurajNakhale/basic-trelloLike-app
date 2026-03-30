@@ -19,22 +19,25 @@ app.post("/signup", async (req, res) => {
     console.log(username);
 
     try{
-        let userExist = await User.findOne({ username });
-        if(userExist){
+        //check if user exist
+        let user = await User.findOne({ username });
+        if(user){
             res.status(400).json({
                 message: "user exists"
             });
             return;
         }
+
         //hash password
         let hashpass =await bcrypt.hash(password, 10);
-    
+        
+        //inserted in user collection
         await User.create({
             username,
             password: hashpass
         })
     
-        res.status(200).json({
+        res.json({
             message: "signup successfull"
         })
     }
@@ -48,25 +51,26 @@ app.post("/signup", async (req, res) => {
 
 app.post("/signin", async (req, res) => {
     let { username, password } = req.body;
-
     try{
-
-        let userExist = await User.findOne({ username });
-
-        if(!userExist){
+        //check user exists
+        let user = await User.findOne({ username });
+        if(!user){
             res.status(400).json({
                 message: "user does not exists"
             });
             return;
         }
+
         //compare password
-        let isMatch =await bcrypt.compare(password, userExist.password);
+        let isMatch = await bcrypt.compare(password, user.password);
         if(!isMatch){
             res.status(401).json({
                 message: "pass incorrect"
             })
+            return;
         }
 
+        //token creation
         const token = jwt.sign({
             userId: userExist._id
         }, JWT_SECRET)
@@ -89,6 +93,7 @@ app.post("/orgs", authMiddleware, async (req, res) => {
     let userId = req.userId;
 
     try{
+        //check if org exists
         let orgExist =await Org.findOne({ title, description });
         if(orgExist){
             res.status(400).json({
@@ -96,7 +101,8 @@ app.post("/orgs", authMiddleware, async (req, res) => {
             });
             return;
         }
-    
+        
+        //inserted in org collections
         let newOrg = await Org.create({
             title,
             description,
@@ -118,20 +124,11 @@ app.post("/orgs", authMiddleware, async (req, res) => {
 })
 
 //add members to the org 
-app.post("/org/:orgId/add-members/:id", authMiddleware, async (req, res) => {
-    const userId = req.userId;
+app.post("/org/:orgId/add-members/:id", authMiddleware, adminMiddleware, async (req, res) => {
     const orgId = req.params.orgId;
     const id = req.params.id
 
     try{
-        let org = await Org.findById(orgId);
-        if(!org){
-            res.status(400).json({
-                message: "org not exists"
-            })
-            return;
-        }
-
         let valid = await User.findById(id);
         if(!valid){
             res.status(400).json({
@@ -161,20 +158,13 @@ app.post("/org/:orgId/add-members/:id", authMiddleware, async (req, res) => {
 
 //create board 
 app.post("/org/:orgId/board",authMiddleware, adminMiddleware,  async (req, res) => {
-    const orgId = req.params.orgId;
     const { title } = req.body;
     try{
-        let org = await Org.findById(orgId);
-        if(!org){
-            res.status(400).json({
-                message: "org not exists"
-            })
-            return;
-        }
+        const org = req.org;
 
-
-        let boardExists = await Board.findOne({ title, orgId: org._id});
-        if(boardExists){
+        //check if board exists
+        let board = await Board.findOne({ title, orgId: org._id});
+        if(board){
             res.status(400).json({
                 message: "board already exists"
             })
@@ -186,7 +176,7 @@ app.post("/org/:orgId/board",authMiddleware, adminMiddleware,  async (req, res) 
             orgId: org._id
         })
 
-        res.status(200).json({
+        res.status(201).json({
             message: "new board added",
             id: newBoard._id,
             title: newBoard.title
@@ -202,28 +192,20 @@ app.post("/org/:orgId/board",authMiddleware, adminMiddleware,  async (req, res) 
 
 //create issues
 app.post("/org/:orgId/board/:boardId/issues", authMiddleware, adminMiddleware, async(req, res) => {
-    const orgId = req.params.orgId;
     const boardId = req.params.boardId;
 
     try{
-
-        let org = await Org.findById(orgId);
-       if(!org){
-           res.status(400).json({
-               message: "org not exists"
-           })
-           return;
-       }
-   
-       const board = await Board.findById(boardId);
-       if (!board) {
+        const org = req.org;
+        //check for board exists
+        const board = await Board.findById(boardId);
+        if (!board) {
            return res.status(400).json({
                message: "board does not exist"
            });
            
-       }
+        }
    
-       const { title, status } = req.body;
+        const { title, status } = req.body;
         let validstatus = ["IN_PROGRESS", "UP_NEXT", "DONE", "ARCHIVE"];
 
         if(!validstatus.includes(status)){
@@ -282,7 +264,7 @@ app.get("/org/:orgId/dashboard", authMiddleware, adminMiddleware, async (req, re
                 }
             })
         }
-
+        //retrive board
         let boards = await Board.find({ orgId: orgId }).select("title").lean();
         let bresult = boards.map(x => ({
             id: x._id,
@@ -306,7 +288,7 @@ app.get("/org/:orgId/board/:boardId", authMiddleware, adminMiddleware, async (re
     let { orgId, boardId } = req.params;
 
     try{
-
+        //check if board exists
         let board = await Board.findOne({ _id: boardId, orgId});
         if(!board){
             res.status(400).json({
@@ -316,14 +298,15 @@ app.get("/org/:orgId/board/:boardId", authMiddleware, adminMiddleware, async (re
         }
     
         let issues = await Issue.find({ boardId }).select("title status").lean()
-        let rissue = issues.map(x => ({
+        let result = issues.map(x => ({
             id: x._id,
             title: x.title,
             status: x.status
         }))
     
         res.status(200).json({
-            issues: rissue
+            board: { id: board._id, title: board.title},
+            issues: result
         })
     }
     catch(err){
@@ -338,7 +321,7 @@ app.get("/org/:orgId/board/:boardId", authMiddleware, adminMiddleware, async (re
 app.get("/org/:orgId/members", authMiddleware,adminMiddleware,  async (req, res) => {
     const orgId = req.params.orgId;
     try{
-
+        //fetch org details along with members info
         let org = await Org.findOne({ _id: orgId }).populate("members", "username").lean();
         if(!org){
             res.status(400).json({
@@ -346,7 +329,8 @@ app.get("/org/:orgId/members", authMiddleware,adminMiddleware,  async (req, res)
             })
             return;
         }
-    
+        
+        //created a members array of object
         let members = org.members.map(x => ({
             id: x._id,
             username: x.username
@@ -404,19 +388,25 @@ app.put("/org/:orgId/board/:boardId/issue/:issueId", authMiddleware, adminMiddle
     const { status } = req.body;
     let valid = ["UP_NEXT", "IN_PROGRESS", "DONE", "ARCHIVE"];
     if(!valid.includes(status)){
-        res.status(401).json({
+        res.status(400).json({
             message: "in valid status input!!"
         })
+        return;
     }
     
     
     try{
-
-        let issue = await Issue.findByIdAndUpdate(issueId, 
-            {$set: {status: status}},
+        let issue = await Issue.findOneAndUpdate(
+            {_id: issueId, boardId: boardId}, //filter
+            {$set: {status: status}}, //update
             {new: true}
         ).lean();
-    
+        
+        if (!issue) {
+                return res.status(404).json({
+                message: "issue not found"
+            });
+        }
         res.status(200).json({
             message: "issue updated",
             title: issue.title,
@@ -438,16 +428,16 @@ app.delete("/org/:orgId/board/:boardId",authMiddleware, adminMiddleware, async (
     const boardId = req.params.boardId;
 
     try{
-
+        //check if board exists
         const board = await Board.findOneAndDelete({ _id: boardId, orgId: req.org._id});
         if(!board){
-            res.status(400).json({
+            res.status(404).json({
                 message: "board does not exists"
             })
             return;
         }
     
-        res.status(200).json({
+        res.json({
             message: "boards deleted",
             board: board
         })
@@ -465,7 +455,7 @@ app.delete("/org/:orgId/member/:memberId",authMiddleware, adminMiddleware,  asyn
     const org = req.org;
    
     try{
-
+        //select org and remove member from member array
         let result = await Org.updateOne({_id: org._id}, {$pull: {members: memberId}})
          if (result.modifiedCount === 0) {
             return res.status(404).json({
@@ -473,7 +463,7 @@ app.delete("/org/:orgId/member/:memberId",authMiddleware, adminMiddleware,  asyn
             });
         }
     
-        res.status(200).json({
+        res.json({
             message: "member removed",
             
         })
@@ -493,7 +483,7 @@ app.delete("/org/:orgId/board/:boardId/issue/:issueId", authMiddleware, adminMid
     const issueId = req.params.issueId;
 
     try{
-    
+        //check if issue exist using id and boardId
         let issue = await Issue.findOneAndDelete({_id: issueId, boardId: boardId});
 
         if(!issue){
@@ -503,7 +493,7 @@ app.delete("/org/:orgId/board/:boardId/issue/:issueId", authMiddleware, adminMid
             return;
         }
 
-        
+
         res.json({
             message: "issue deleted successfully"
         })
